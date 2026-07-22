@@ -1,0 +1,6 @@
+{
+  "name": "Aplikasi Penjualan Tambang & Alat Berat",
+  "description": "Sistem informasi pencatatan transaksi penjualan tambang terintegrasi dengan database kendaraan, customer, barang, alat berat, dan laporan keuangan serta export Excel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
