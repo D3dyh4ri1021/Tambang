@@ -1,6 +1,13 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import {
+  INITIAL_ALAT_BERAT,
+  INITIAL_BARANG,
+  INITIAL_KENDARAAN,
+  INITIAL_CUSTOMER,
+  INITIAL_PENJUALAN
+} from "../src/utils/seedData";
 
 const app = express();
 
@@ -32,15 +39,16 @@ const DB_FILE = isVercel
 function loadDatabase() {
   if (!fs.existsSync(DB_FILE)) {
     return {
-      sales: [],
-      alat: [],
-      barang: [],
-      kendaraan: [],
-      customer: [],
+      sales: INITIAL_PENJUALAN,
+      alat: INITIAL_ALAT_BERAT,
+      barang: INITIAL_BARANG,
+      kendaraan: INITIAL_KENDARAAN,
+      customer: INITIAL_CUSTOMER,
       users: [
         { username: "admin", password: "admin", role: "All" },
         { username: "viewer", password: "viewer", role: "Display Only" }
-      ]
+      ],
+      lastUpdated: 1000000 // default base timestamp
     };
   }
   try {
@@ -49,15 +57,16 @@ function loadDatabase() {
   } catch (err) {
     console.error("Error reading database file", err);
     return {
-      sales: [],
-      alat: [],
-      barang: [],
-      kendaraan: [],
-      customer: [],
+      sales: INITIAL_PENJUALAN,
+      alat: INITIAL_ALAT_BERAT,
+      barang: INITIAL_BARANG,
+      kendaraan: INITIAL_KENDARAAN,
+      customer: INITIAL_CUSTOMER,
       users: [
         { username: "admin", password: "admin", role: "All" },
         { username: "viewer", password: "viewer", role: "Display Only" }
-      ]
+      ],
+      lastUpdated: 1000000
     };
   }
 }
@@ -87,13 +96,14 @@ router.get("/data", (req, res) => {
     alat: db.alat || [],
     barang: db.barang || [],
     kendaraan: db.kendaraan || [],
-    customer: db.customer || []
+    customer: db.customer || [],
+    lastUpdated: db.lastUpdated || 0
   });
 });
 
 // API: Update entire system data
 router.post("/data", (req, res) => {
-  const { sales, alat, barang, kendaraan, customer } = req.body || {};
+  const { sales, alat, barang, kendaraan, customer, lastUpdated } = req.body || {};
   const db = loadDatabase();
 
   if (sales !== undefined) db.sales = sales;
@@ -101,9 +111,10 @@ router.post("/data", (req, res) => {
   if (barang !== undefined) db.barang = barang;
   if (kendaraan !== undefined) db.kendaraan = kendaraan;
   if (customer !== undefined) db.customer = customer;
+  db.lastUpdated = lastUpdated || Date.now();
 
   saveDatabase(db);
-  res.json({ success: true, message: "Database synchronized successfully" });
+  res.json({ success: true, message: "Database synchronized successfully", lastUpdated: db.lastUpdated });
 });
 
 // API: Get all users

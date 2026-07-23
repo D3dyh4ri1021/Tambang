@@ -99,43 +99,88 @@ export default function App() {
   // 4. Live Clock State
   const [timeString, setTimeString] = useState('');
 
-  // Server data fetching
-  const fetchServerData = async (forceInitialSeed = false) => {
+  // Helper to push modified state to server
+  const pushDataToServer = async (
+    sales: Penjualan[],
+    alat: AlatBerat[],
+    barang: Barang[],
+    kendaraan: Kendaraan[],
+    customer: Customer[],
+    customTimestamp?: number
+  ) => {
+    if (isDisplayOnly(operatorRole)) {
+      alert(`Akses Ditolak: Hak akses Anda (${operatorRole}) hanya "Display Only" / Read Only. Anda tidak diizinkan memodifikasi data.`);
+      return false;
+    }
+    setIsSyncing(true);
+    const ts = customTimestamp || Date.now();
+    localStorage.setItem('majujaya_last_updated', String(ts));
+    localStorage.setItem('majujaya_sales', JSON.stringify(sales));
+    localStorage.setItem('majujaya_alat', JSON.stringify(alat));
+    localStorage.setItem('majujaya_barang', JSON.stringify(barang));
+    localStorage.setItem('majujaya_kendaraan', JSON.stringify(kendaraan));
+    localStorage.setItem('majujaya_customer', JSON.stringify(customer));
+
+    try {
+      const response = await fetch('/api/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sales, alat, barang, kendaraan, customer, lastUpdated: ts })
+      });
+      if (!response.ok) {
+        throw new Error('Sync failed');
+      }
+      return true;
+    } catch (err) {
+      console.error('Failed to sync changes with server:', err);
+      // Local changes are still safely stored in localStorage
+      return true;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Server data fetching with smart timestamp comparison
+  const fetchServerData = async () => {
     setIsSyncing(true);
     try {
       const response = await fetch('/api/data');
       if (response.ok) {
         const data = await response.json();
-        
-        // Check if database is completely empty on the server
-        const isEmpty = 
-          (!data.sales || data.sales.length === 0) &&
-          (!data.alat || data.alat.length === 0) &&
-          (!data.barang || data.barang.length === 0) &&
-          (!data.kendaraan || data.kendaraan.length === 0) &&
-          (!data.customer || data.customer.length === 0);
+        const serverLastUpdated = Number(data.lastUpdated || 0);
 
-        if (isEmpty && forceInitialSeed) {
-          // Seed the server database with initial presets
-          console.log('Server database is empty. Seeding with default data...');
-          await fetch('/api/data', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sales: INITIAL_PENJUALAN,
-              alat: INITIAL_ALAT_BERAT,
-              barang: INITIAL_BARANG,
-              kendaraan: INITIAL_KENDARAAN,
-              customer: INITIAL_CUSTOMER
-            })
-          });
-          setSalesList(INITIAL_PENJUALAN);
-          setAlatBeratList(INITIAL_ALAT_BERAT);
-          setBarangList(INITIAL_BARANG);
-          setKendaraanList(INITIAL_KENDARAAN);
-          setCustomerList(INITIAL_CUSTOMER);
-        } else {
-          // Normal hydration from server, only update state if data changed to preserve references
+        const localSalesStr = localStorage.getItem('majujaya_sales');
+        const localAlatStr = localStorage.getItem('majujaya_alat');
+        const localBarangStr = localStorage.getItem('majujaya_barang');
+        const localKendaraanStr = localStorage.getItem('majujaya_kendaraan');
+        const localCustomerStr = localStorage.getItem('majujaya_customer');
+        const localLastUpdated = Number(localStorage.getItem('majujaya_last_updated') || 0);
+
+        const localSales = localSalesStr ? JSON.parse(localSalesStr) : [];
+        const localAlat = localAlatStr ? JSON.parse(localAlatStr) : [];
+        const localBarang = localBarangStr ? JSON.parse(localBarangStr) : [];
+        const localKendaraan = localKendaraanStr ? JSON.parse(localKendaraanStr) : [];
+        const localCustomer = localCustomerStr ? JSON.parse(localCustomerStr) : [];
+
+        const hasLocalItems = localSales.length > 0 || localAlat.length > 0;
+
+        // If local client has newer edits than server (e.g. server container restarted on Vercel), re-sync local to server
+        if (hasLocalItems && localLastUpdated > serverLastUpdated) {
+          console.log('Local client data is newer than server container. Re-syncing local data to server...');
+          const currentSales = salesList.length > 0 ? salesList : localSales;
+          const currentAlat = alatBeratList.length > 0 ? alatBeratList : localAlat;
+          const currentBarang = barangList.length > 0 ? barangList : localBarang;
+          const currentKendaraan = kendaraanList.length > 0 ? kendaraanList : localKendaraan;
+          const currentCustomer = customerList.length > 0 ? customerList : localCustomer;
+
+          await pushDataToServer(currentSales, currentAlat, currentBarang, currentKendaraan, currentCustomer, localLastUpdated);
+          setSalesList(currentSales);
+          setAlatBeratList(currentAlat);
+          setBarangList(currentBarang);
+          setKendaraanList(currentKendaraan);
+          setCustomerList(currentCustomer);
+        } else if (data.sales || data.alat) {
+          // Server data is newer or equal, or local is empty
           const newSales = data.sales || [];
           const newAlat = data.alat || [];
           const newBarang = data.barang || [];
@@ -147,6 +192,15 @@ export default function App() {
           setBarangList((prev) => (JSON.stringify(prev) === JSON.stringify(newBarang) ? prev : newBarang));
           setKendaraanList((prev) => (JSON.stringify(prev) === JSON.stringify(newKendaraan) ? prev : newKendaraan));
           setCustomerList((prev) => (JSON.stringify(prev) === JSON.stringify(newCustomer) ? prev : newCustomer));
+
+          localStorage.setItem('majujaya_sales', JSON.stringify(newSales));
+          localStorage.setItem('majujaya_alat', JSON.stringify(newAlat));
+          localStorage.setItem('majujaya_barang', JSON.stringify(newBarang));
+          localStorage.setItem('majujaya_kendaraan', JSON.stringify(newKendaraan));
+          localStorage.setItem('majujaya_customer', JSON.stringify(newCustomer));
+          if (serverLastUpdated > 0) {
+            localStorage.setItem('majujaya_last_updated', String(serverLastUpdated));
+          }
         }
       }
     } catch (err) {
@@ -154,37 +208,6 @@ export default function App() {
     } finally {
       setIsSyncing(false);
       setIsHydrated(true);
-    }
-  };
-
-  // Helper to push modified state to server
-  const pushDataToServer = async (
-    sales: Penjualan[],
-    alat: AlatBerat[],
-    barang: Barang[],
-    kendaraan: Kendaraan[],
-    customer: Customer[]
-  ) => {
-    if (isDisplayOnly(operatorRole)) {
-      alert(`Akses Ditolak: Hak akses Anda (${operatorRole}) hanya "Display Only" / Read Only. Anda tidak diizinkan memodifikasi data.`);
-      return false;
-    }
-    setIsSyncing(true);
-    try {
-      const response = await fetch('/api/data', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sales, alat, barang, kendaraan, customer })
-      });
-      if (!response.ok) {
-        throw new Error('Sync failed');
-      }
-      return true;
-    } catch (err) {
-      console.error('Failed to sync changes with server:', err);
-      return false;
-    } finally {
-      setIsSyncing(false);
     }
   };
 
@@ -204,14 +227,14 @@ export default function App() {
     if (localCustomer) setCustomerList(JSON.parse(localCustomer));
 
     // 2. Hydrate & seed from central server
-    fetchServerData(true);
+    fetchServerData();
   }, []);
 
   // 5b. Background Real-time Sync Polling
   useEffect(() => {
     if (!isLoggedIn) return;
     const interval = setInterval(() => {
-      fetchServerData(false);
+      fetchServerData();
     }, 5000); // Poll server every 5 seconds for live multi-user sync
     return () => clearInterval(interval);
   }, [isLoggedIn]);
