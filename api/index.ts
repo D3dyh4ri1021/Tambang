@@ -1,0 +1,195 @@
+import express from "express";
+import path from "path";
+import fs from "fs";
+
+const app = express();
+
+// Enable CORS and Preflight
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
+  );
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
+  }
+  next();
+});
+
+app.use(express.json());
+
+// In Vercel serverless functions, write local storage to /tmp directory
+const isVercel = process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
+const DB_FILE = isVercel
+  ? path.join("/tmp", "majujaya_db.json")
+  : path.join(process.cwd(), "majujaya_db.json");
+
+// Helper to load database
+function loadDatabase() {
+  if (!fs.existsSync(DB_FILE)) {
+    return {
+      sales: [],
+      alat: [],
+      barang: [],
+      kendaraan: [],
+      customer: [],
+      users: [
+        { username: "admin", password: "admin", role: "All" },
+        { username: "viewer", password: "viewer", role: "Display Only" }
+      ]
+    };
+  }
+  try {
+    const data = fs.readFileSync(DB_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch (err) {
+    console.error("Error reading database file", err);
+    return {
+      sales: [],
+      alat: [],
+      barang: [],
+      kendaraan: [],
+      customer: [],
+      users: [
+        { username: "admin", password: "admin", role: "All" },
+        { username: "viewer", password: "viewer", role: "Display Only" }
+      ]
+    };
+  }
+}
+
+// Helper to save database
+function saveDatabase(data: any) {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Error writing database file", err);
+  }
+}
+
+// Router to handle endpoints flexibly
+const router = express.Router();
+
+// Health check
+router.get("/health", (req, res) => {
+  res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+// API: Get entire system data
+router.get("/data", (req, res) => {
+  const db = loadDatabase();
+  res.json({
+    sales: db.sales || [],
+    alat: db.alat || [],
+    barang: db.barang || [],
+    kendaraan: db.kendaraan || [],
+    customer: db.customer || []
+  });
+});
+
+// API: Update entire system data
+router.post("/data", (req, res) => {
+  const { sales, alat, barang, kendaraan, customer } = req.body || {};
+  const db = loadDatabase();
+
+  if (sales !== undefined) db.sales = sales;
+  if (alat !== undefined) db.alat = alat;
+  if (barang !== undefined) db.barang = barang;
+  if (kendaraan !== undefined) db.kendaraan = kendaraan;
+  if (customer !== undefined) db.customer = customer;
+
+  saveDatabase(db);
+  res.json({ success: true, message: "Database synchronized successfully" });
+});
+
+// API: Get all users
+router.get("/users", (req, res) => {
+  const db = loadDatabase();
+  const safeUsers = (db.users || []).map((u: any) => ({
+    username: u.username,
+    role: u.role
+  }));
+  res.json(safeUsers);
+});
+
+// API: Create or update a user
+router.post("/users", (req, res) => {
+  const { username, password, role } = req.body || {};
+  if (!username || !role) {
+    return res.status(400).json({ success: false, message: "Username dan role wajib diisi" });
+  }
+
+  const db = loadDatabase();
+  if (!db.users) db.users = [];
+
+  const existingIndex = db.users.findIndex((u: any) => u.username.toLowerCase() === username.toLowerCase());
+
+  if (existingIndex >= 0) {
+    db.users[existingIndex].role = role;
+    if (password) {
+      db.users[existingIndex].password = password;
+    }
+  } else {
+    if (!password) {
+      return res.status(400).json({ success: false, message: "Password wajib diisi untuk pengguna baru" });
+    }
+    db.users.push({ username, password, role });
+  }
+
+  saveDatabase(db);
+  res.json({ success: true, message: "User berhasil disimpan" });
+});
+
+// API: Delete user
+router.post("/users/delete", (req, res) => {
+  const { username } = req.body || {};
+  if (!username) {
+    return res.status(400).json({ success: false, message: "Username wajib ditentukan" });
+  }
+
+  const db = loadDatabase();
+  if (!db.users) db.users = [];
+
+  const filtered = db.users.filter((u: any) => u.username.toLowerCase() !== username.toLowerCase());
+  db.users = filtered;
+
+  saveDatabase(db);
+  res.json({ success: true, message: "User berhasil dihapus" });
+});
+
+// API: Login verification
+router.post("/auth/login", (req, res) => {
+  const { username, password } = req.body || {};
+  const db = loadDatabase();
+  if (!db.users) db.users = [];
+
+  const user = db.users.find(
+    (u: any) => u.username.toLowerCase() === username.toLowerCase() && u.password === password
+  );
+
+  if (user) {
+    res.json({ success: true, username: user.username, role: user.role });
+  } else {
+    res.status(401).json({ success: false, message: "Username atau password salah" });
+  }
+});
+
+// Mount router on both /api and /
+app.use("/api", router);
+app.use("/", router);
+
+// Catch-all 404 for unhandled API endpoints
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "API endpoint not found",
+    method: req.method,
+    path: req.url
+  });
+});
+
+export default app;

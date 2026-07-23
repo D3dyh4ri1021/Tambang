@@ -4,12 +4,14 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 
 const PORT = 3000;
-const DB_FILE = path.join(process.cwd(), "majujaya_db.json");
+const isVercel = process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
+const DB_FILE = isVercel
+  ? path.join("/tmp", "majujaya_db.json")
+  : path.join(process.cwd(), "majujaya_db.json");
 
 // Helper to load database
 function loadDatabase() {
   if (!fs.existsSync(DB_FILE)) {
-    // Return empty structures, which will be hydrated with demo presets on client if empty
     return {
       sales: [],
       alat: [],
@@ -26,7 +28,7 @@ function loadDatabase() {
     const data = fs.readFileSync(DB_FILE, "utf-8");
     return JSON.parse(data);
   } catch (err) {
-    console.error("Error reading database file, returning default structure", err);
+    console.error("Error reading database file", err);
     return {
       sales: [],
       alat: [],
@@ -52,10 +54,34 @@ function saveDatabase(data: any) {
 
 async function startServer() {
   const app = express();
+
+  // Enable CORS
+  app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
+    );
+    if (req.method === "OPTIONS") {
+      res.status(200).end();
+      return;
+    }
+    next();
+  });
+
   app.use(express.json());
 
+  // Router for API endpoints
+  const router = express.Router();
+
+  router.get("/health", (req, res) => {
+    res.json({ status: "ok", time: new Date().toISOString() });
+  });
+
   // API: Get entire system data
-  app.get("/api/data", (req, res) => {
+  router.get("/data", (req, res) => {
     const db = loadDatabase();
     res.json({
       sales: db.sales || [],
@@ -66,9 +92,9 @@ async function startServer() {
     });
   });
 
-  // API: Update entire system data (controlled by permission checked on the front-end)
-  app.post("/api/data", (req, res) => {
-    const { sales, alat, barang, kendaraan, customer } = req.body;
+  // API: Update entire system data
+  router.post("/data", (req, res) => {
+    const { sales, alat, barang, kendaraan, customer } = req.body || {};
     const db = loadDatabase();
 
     if (sales !== undefined) db.sales = sales;
@@ -82,9 +108,8 @@ async function startServer() {
   });
 
   // API: Get all users
-  app.get("/api/users", (req, res) => {
+  router.get("/users", (req, res) => {
     const db = loadDatabase();
-    // Return users without passwords for security
     const safeUsers = (db.users || []).map((u: any) => ({
       username: u.username,
       role: u.role
@@ -93,8 +118,8 @@ async function startServer() {
   });
 
   // API: Create or update a user
-  app.post("/api/users", (req, res) => {
-    const { username, password, role } = req.body;
+  router.post("/users", (req, res) => {
+    const { username, password, role } = req.body || {};
     if (!username || !role) {
       return res.status(400).json({ success: false, message: "Username dan role wajib diisi" });
     }
@@ -105,13 +130,11 @@ async function startServer() {
     const existingIndex = db.users.findIndex((u: any) => u.username.toLowerCase() === username.toLowerCase());
 
     if (existingIndex >= 0) {
-      // Update role and password if provided
       db.users[existingIndex].role = role;
       if (password) {
         db.users[existingIndex].password = password;
       }
     } else {
-      // Add new user
       if (!password) {
         return res.status(400).json({ success: false, message: "Password wajib diisi untuk pengguna baru" });
       }
@@ -123,8 +146,8 @@ async function startServer() {
   });
 
   // API: Delete user
-  app.post("/api/users/delete", (req, res) => {
-    const { username } = req.body;
+  router.post("/users/delete", (req, res) => {
+    const { username } = req.body || {};
     if (!username) {
       return res.status(400).json({ success: false, message: "Username wajib ditentukan" });
     }
@@ -140,8 +163,8 @@ async function startServer() {
   });
 
   // API: Login verification
-  app.post("/api/auth/login", (req, res) => {
-    const { username, password } = req.body;
+  router.post("/auth/login", (req, res) => {
+    const { username, password } = req.body || {};
     const db = loadDatabase();
     if (!db.users) db.users = [];
 
@@ -155,6 +178,8 @@ async function startServer() {
       res.status(401).json({ success: false, message: "Username atau password salah" });
     }
   });
+
+  app.use("/api", router);
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
